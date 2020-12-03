@@ -51,6 +51,65 @@ def encode_line(tokenizer, line, max_length, pad_to_max_length=True, return_tens
         **extra_kw,
     )
 
+BART_TOKENIZER_STARTCHAR='Ġ'
+# encode the relevance file line: the format is the same as the source file, each word has an answer relevance probability
+def encode_relevance_line(tokenizer, src_line, relevance_line, pad_token_id, max_length, pad_to_max_length=True, return_tensors="pt"):
+    src_context_line = src_line.split('[SEP]')[0]
+    
+    assert len(src_context_line.split()) == len(relevance_line.split()), f'the length is {len(src_context_line.split())} and {len(relevance_line.split())}'
+
+    relevance_2_words = []
+    relevance_2_words = relevance_line.split()
+    for i, item in enumerate(relevance_2_words):
+        relevance_2_words[i] = float(item)
+    src_tokens = tokenizer.tokenize(src_context_line) # since extra_kw = {"add_prefix_space": True}
+    src_tokens = src_tokens[:-1]
+    src_line_tokens = tokenizer.tokenize(src_line)
+    
+    print("the the the length is {} and {} and {}".format(len(relevance_2_words), len(src_tokens), len(src_line_tokens)))
+    print(src_tokens)
+    print(src_line_tokens)
+
+    relevance_2_ids = []
+    relevance_2_ids.append(0.0)
+    cur_word_index = 0
+    for index, token in enumerate(src_tokens):
+        if index==0:
+            cur_word_index = 0
+        else:
+            if token.startswith(BART_TOKENIZER_STARTCHAR): # a new word
+                # relevance_2_ids.append(float(relevance_2_words[cur_word_index]))
+                if token.replace(BART_TOKENIZER_STARTCHAR, '') != '':
+                    cur_word_index += 1
+        relevance_2_ids.append(float(relevance_2_words[cur_word_index]))
+    
+    que_atten = max(relevance_2_words)
+
+
+    for i in src_line_tokens[index + 1 : index + 5]: #[SEP]
+        relevance_2_ids.append(0.0)
+
+    for i in src_line_tokens[index + 5 : ]:
+        relevance_2_ids.append(float(que_atten))
+    
+    relevance_2_ids.append(0.0)
+
+    print("the actual length of relevance_2_ids and src_line_tokens is {} and {}".format(len(relevance_2_ids), len(src_line_tokens)))
+
+    # padding
+    while len(relevance_2_ids) < max_length:
+        relevance_2_ids.append(float(pad_token_id))
+    # truncate
+    if len(relevance_2_ids) > max_length:
+        # src_line_tokens = src_line_tokens[:max_length]
+        relevance_2_ids = relevance_2_ids[:max_length]
+        
+    print("the aligned relevance score to id is \n")
+    print(relevance_2_ids)
+
+    print(len(relevance_2_ids))
+
+    return torch.FloatTensor(relevance_2_ids)
 
 def lmap(f: Callable, x: Iterable) -> List:
     """list(map(f, x))"""
@@ -154,6 +213,121 @@ class LegacySeq2SeqDataset(AbstractSeq2SeqDataset):
             "labels": y,
         }
         return batch
+
+class Seq2SeqDataset_QFS(Dataset):
+    def __init__(
+        self,
+        tokenizer,
+        data_dir,
+        max_source_length,
+        max_target_length,
+        type_path="train",
+        n_obs=None,
+        src_lang=None,
+        tgt_lang=None,
+        prefix="",
+    ):
+        super().__init__()
+        self.src_file = Path(data_dir).joinpath(type_path + ".source")
+        self.tgt_file = Path(data_dir).joinpath(type_path + ".target")
+        self.relevance_file = Path(data_dir).joinpath(type_path + ".relevance")   # the qa relevance score
+        self.src_lens = self.get_char_lens(self.src_file)
+        self.rel_lens = self.get_char_lens(self.relevance_file)
+        self.max_source_length = max_source_length
+        self.max_target_length = max_target_length
+        assert min(self.src_lens) > 0, f"found empty line in {self.src_file}"
+        assert min(self.rel_lens) > 0, f"found empty line in {self.relevance_file}"
+
+        self.tokenizer = tokenizer
+        self.prefix = prefix
+        if n_obs is not None:
+            self.src_lens = self.src_lens[:n_obs]
+        self.pad_token_id = self.tokenizer.pad_token_id
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
+
+    def __len__(self):
+        return len(self.src_lens)
+
+    def __getitem__(self, index) -> Dict[str, torch.Tensor]:
+        index = index + 1  # linecache starts at 1
+        source_line = self.prefix + linecache.getline(str(self.src_file), index).rstrip("\n")
+        tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
+        relevance_line = linecache.getline(str(self.relevance_file), index).rstrip("\n")
+        assert source_line, f"empty source line for index {index}"
+        assert tgt_line, f"empty tgt line for index {index}"
+        assert relevance_line, f"empty relevance line for index {index}"
+
+        print("this is debug the {} line".format(index))
+        
+        src_context_line = source_line.split('[SEP]')[0]
+        print("the line is {}".format(src_context_line))
+        
+        # print("the length is {} and {}".format(len(src_context_line.split()), len(relevance_line.split())))
+        # should do assert here
+
+
+        source_inputs = encode_line(self.tokenizer, source_line, self.max_source_length)
+        target_inputs = encode_line(self.tokenizer, tgt_line, self.max_target_length)
+        
+        pad_token_id = self.pad_token_id
+        relevance_inputs = encode_relevance_line(self.tokenizer, source_line, relevance_line, pad_token_id, self.max_source_length)
+
+
+        source_ids = source_inputs["input_ids"].squeeze()
+        target_ids = target_inputs["input_ids"].squeeze()
+        src_mask = source_inputs["attention_mask"].squeeze()
+        relevance_atten = relevance_inputs.squeeze()
+        assert source_ids.size() == relevance_atten.size(), f'the size of the source_id and relevance_inputs is {source_ids.size()} and {relevance_atten.size()}'
+        # print("the size of source_inputs is {}".format(source_ids.size()))
+        # print("the size of relevance_inputs is {}".format(relevance_atten.size()))
+
+        return {
+            "input_ids": source_ids,
+            "attention_mask": src_mask,
+            "decoder_input_ids": target_ids,
+            "answer_relevance_atten": relevance_atten,
+        }
+
+    @staticmethod
+    def get_char_lens(data_file):
+        return [len(x) for x in Path(data_file).open().readlines()]
+
+    def collate_fn(self, batch) -> Dict[str, torch.Tensor]:
+        input_ids = torch.stack([x["input_ids"] for x in batch])
+        masks = torch.stack([x["attention_mask"] for x in batch])
+        target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
+        ans_relevance_atten = torch.stack([x["answer_relevance_atten"] for x in batch])
+
+        print("debug sudan sudan")
+        print(input_ids.size())
+        print(masks.size())
+        print(ans_relevance_atten.size())
+
+        pad_token_id = self.pad_token_id
+        y = trim_batch(target_ids, pad_token_id)
+        source_ids, source_mask = trim_batch(input_ids, pad_token_id, attention_mask=masks)
+        source_ans_relevance_atten, _ = trim_batch(ans_relevance_atten, pad_token_id, attention_mask=masks)
+
+        print("hello world debug the data input")
+        print(source_ids)
+        print(source_ids.size())
+        print(source_ans_relevance_atten)
+        print(source_ans_relevance_atten.size())
+
+        batch = {
+            "input_ids": source_ids,
+            "attention_mask": source_mask,
+            "labels": y,
+            # "decoder_input_ids": y,
+            "answer_relevance_atten": source_ans_relevance_atten,
+        }
+        return batch
+
+    def make_sortish_sampler(self, batch_size):
+        return SortishSampler(self.src_lens, batch_size)
+
+
 
 
 class Seq2SeqDataset(AbstractSeq2SeqDataset):
