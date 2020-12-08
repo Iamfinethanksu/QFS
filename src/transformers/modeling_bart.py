@@ -1100,22 +1100,23 @@ class Attention_QFS(nn.Module):
         
         
         print("debug sudan========")
-        print(k.size()) # torch.Size([96, 88, 64])
+        # print(k.size()) # torch.Size([96, 88, 64])
         # the bsz is 6, and num_heads is 16, tgt_len 1 and src_len is 88
         print("the bsz is {}, and num_heads is {}, tgt_len {} and src_len is {}".format(bsz, self.num_heads, tgt_len, src_len))
-        print(encoder_answer_relevance_atten.size())   # torch.Size([1, 88])
-        print(encoder_answer_relevance_atten)
-
-
+        print(encoder_answer_relevance_atten.size())   # torch.Size([1, 88]) bsz x src_len
+        # print(encoder_answer_relevance_atten)
+        # print(encoder_answer_relevance_atten.view(bsz, 1, 1, src_len))
+        batch_size_real, _ =  encoder_answer_relevance_atten.size()
         # add the answer relevance attention to the atten_weights
         if encoder_answer_relevance_atten is not None:    # orig: bsz x src_len x 1
             # encoder_answer_relevance_atten = encoder_answer_relevance_atten.contiguous().view(src_len, bsz, 1).transpose(0, 1)  
             # target: bsz x num_heads x tgt_len x src_len
-            encoder_answer_relevance_atten = encoder_answer_relevance_atten.view(1, -1, 1, src_len).repeat(bsz, self.num_heads, tgt_len,1)
-                                            
+            encoder_answer_relevance_atten = encoder_answer_relevance_atten.view(-1, 1, 1, src_len).repeat(int(bsz/batch_size_real), self.num_heads, tgt_len,1)
+        
+        print("debug sudan (1)========")
+        print(encoder_answer_relevance_atten.size())   # torch.Size([1, 88])
 
         attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + encoder_answer_relevance_atten
-        # attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
 
 
         if attn_mask is not None:
