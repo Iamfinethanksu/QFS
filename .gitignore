@@ -1,5 +1,15 @@
 # Initially taken from Github's Python gitignore file
 
+
+/examples/seq2seq/test_data/*
+/examples/seq2seq/*log*
+/examples/seq2seq/debatepedia_results_qfs/*
+/examples/seq2seq/lightning_logs/*/*
+/examples/seq2seq/debatepedia_test_generations.txt
+/examples/seq2seq/test_log_finetune_debatepedia_qfs_1206.txt
+/examples/seq2seq/hparams.yaml
+/examples/seq2seq/test.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
